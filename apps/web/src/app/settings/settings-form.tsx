@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
 import { GithubConnect } from "./github-connect";
+import { NotionConnect } from "./notion-connect";
 
 interface Props {
   userId: string;
@@ -11,6 +12,7 @@ interface Props {
   toolSettings: Array<{ tool_id: string; enabled: boolean }>;
   telegramLinked: boolean;
   githubConnected: boolean;
+  notionConnected: boolean;
 }
 
 const TOOL_IDS = [
@@ -20,9 +22,14 @@ const TOOL_IDS = [
   "github_list_issues",
   "github_create_issue",
   "github_create_repo",
+  "notion_search",
+  "notion_retrieve_page",
+  "notion_query_database",
+  "notion_create_page",
+  "notion_append_paragraph",
 ];
 
-export function SettingsForm({ userId, profile, toolSettings, telegramLinked, githubConnected }: Props) {
+export function SettingsForm({ userId, profile, toolSettings, telegramLinked, githubConnected, notionConnected }: Props) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -150,6 +157,12 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked, gi
       <section className="space-y-4">
         <h2 className="text-base font-semibold">GitHub</h2>
         <GithubConnect connected={githubConnected} />
+      </section>
+
+      {/* Notion */}
+      <section className="space-y-4">
+        <h2 className="text-base font-semibold">Notion</h2>
+        <NotionConnect connected={notionConnected} />
       </section>
 
       {/* Telegram */}

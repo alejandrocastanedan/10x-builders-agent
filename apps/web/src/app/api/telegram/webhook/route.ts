@@ -69,14 +69,22 @@ async function answerCallbackQuery(callbackQueryId: string, text: string) {
 async function loadIntegrationTokens(
   db: ReturnType<typeof createServerClient>,
   userId: string
-): Promise<{ github?: string }> {
-  const tokens: { github?: string } = {};
+): Promise<{ github?: string; notion?: string }> {
+  const tokens: { github?: string; notion?: string } = {};
   const gh = await getIntegrationByProvider(db, userId, "github");
   if (gh?.encrypted_tokens) {
     try {
       tokens.github = decryptToken(gh.encrypted_tokens);
     } catch (e) {
       console.error("Failed to decrypt GitHub token:", e);
+    }
+  }
+  const notion = await getIntegrationByProvider(db, userId, "notion");
+  if (notion?.encrypted_tokens) {
+    try {
+      tokens.notion = decryptToken(notion.encrypted_tokens);
+    } catch (e) {
+      console.error("Failed to decrypt Notion token:", e);
     }
   }
   return tokens;

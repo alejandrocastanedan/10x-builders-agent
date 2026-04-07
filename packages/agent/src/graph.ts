@@ -37,7 +37,7 @@ export interface AgentInput {
   db: DbClient;
   enabledTools: UserToolSetting[];
   integrations: UserIntegration[];
-  integrationTokens: { github?: string };
+  integrationTokens: { github?: string; notion?: string };
 }
 
 export interface AgentOutput {

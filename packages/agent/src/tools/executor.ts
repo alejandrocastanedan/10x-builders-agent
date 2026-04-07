@@ -17,12 +17,19 @@ import {
   createIssue,
   createRepo,
 } from "./github";
+import {
+  searchNotion,
+  retrievePage,
+  queryDatabase,
+  createPage,
+  appendParagraph,
+} from "./notion";
 
 export interface ExecutorContext {
   db: DbClient;
   userId: string;
   enabledTools: UserToolSetting[];
-  integrationTokens: { github?: string };
+  integrationTokens: { github?: string; notion?: string };
 }
 
 export interface ExecutorResult {
@@ -36,6 +43,13 @@ function requireGithubToken(ctx: ExecutorContext): string {
     throw new Error("GitHub no está conectado para este usuario.");
   }
   return ctx.integrationTokens.github;
+}
+
+function requireNotionToken(ctx: ExecutorContext): string {
+  if (!ctx.integrationTokens.notion) {
+    throw new Error("Notion no está conectado para este usuario.");
+  }
+  return ctx.integrationTokens.notion;
 }
 
 export async function executeTool(
@@ -135,6 +149,101 @@ export async function executeTool(
             private: repo.private,
             html_url: repo.html_url,
           },
+        };
+      }
+
+      case "notion_search": {
+        const token = requireNotionToken(ctx);
+        const query = String(args.query ?? "");
+        const filter =
+          args.filter === "page" || args.filter === "database"
+            ? (args.filter as "page" | "database")
+            : undefined;
+        const pageSize =
+          typeof args.page_size === "number" ? args.page_size : 10;
+        const data = await searchNotion(token, query, filter, pageSize);
+        return {
+          ok: true,
+          data: {
+            results: data.results.map((r) => ({
+              object: r.object,
+              id: r.id,
+              url: r.url,
+            })),
+          },
+        };
+      }
+
+      case "notion_retrieve_page": {
+        const token = requireNotionToken(ctx);
+        const pageId = String(args.page_id ?? "");
+        const page = await retrievePage(token, pageId);
+        return {
+          ok: true,
+          data: {
+            id: page.id,
+            url: page.url,
+            archived: page.archived,
+            properties: page.properties,
+          },
+        };
+      }
+
+      case "notion_query_database": {
+        const token = requireNotionToken(ctx);
+        const databaseId = String(args.database_id ?? "");
+        const pageSize =
+          typeof args.page_size === "number" ? args.page_size : 10;
+        const data = await queryDatabase(token, databaseId, pageSize);
+        return {
+          ok: true,
+          data: {
+            results: data.results.map((r) => ({
+              object: r.object,
+              id: r.id,
+              url: r.url,
+            })),
+          },
+        };
+      }
+
+      case "notion_create_page": {
+        const token = requireNotionToken(ctx);
+        const title = String(args.title ?? "");
+        const content = args.content ? String(args.content) : undefined;
+        const parentPageId = args.parent_page_id
+          ? String(args.parent_page_id)
+          : undefined;
+        const parentDatabaseId = args.parent_database_id
+          ? String(args.parent_database_id)
+          : undefined;
+        if (!parentPageId && !parentDatabaseId) {
+          return {
+            ok: false,
+            error: "Debes indicar parent_page_id o parent_database_id.",
+          };
+        }
+        const parent = parentDatabaseId
+          ? { database_id: parentDatabaseId }
+          : { page_id: parentPageId! };
+        const page = await createPage(token, parent, title, content);
+        return {
+          ok: true,
+          data: {
+            id: page.id,
+            url: page.url,
+          },
+        };
+      }
+
+      case "notion_append_paragraph": {
+        const token = requireNotionToken(ctx);
+        const blockId = String(args.block_id ?? "");
+        const text = String(args.text ?? "");
+        await appendParagraph(token, blockId, text);
+        return {
+          ok: true,
+          data: { block_id: blockId, appended: true },
         };
       }
 

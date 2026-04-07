@@ -42,13 +42,21 @@ export async function POST(request: Request) {
       .eq("status", "active");
 
     // Load and decrypt provider tokens (server-only).
-    const integrationTokens: { github?: string } = {};
+    const integrationTokens: { github?: string; notion?: string } = {};
     const ghIntegration = await getIntegrationByProvider(db, user.id, "github");
     if (ghIntegration?.encrypted_tokens) {
       try {
         integrationTokens.github = decryptToken(ghIntegration.encrypted_tokens);
       } catch (e) {
         console.error("Failed to decrypt GitHub token:", e);
+      }
+    }
+    const notionIntegration = await getIntegrationByProvider(db, user.id, "notion");
+    if (notionIntegration?.encrypted_tokens) {
+      try {
+        integrationTokens.notion = decryptToken(notionIntegration.encrypted_tokens);
+      } catch (e) {
+        console.error("Failed to decrypt Notion token:", e);
       }
     }
 

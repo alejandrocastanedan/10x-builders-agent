@@ -27,6 +27,7 @@ export default async function SettingsPage() {
 
   const db = createServerClient();
   const ghIntegration = await getIntegrationByProvider(db, user.id, "github");
+  const notionIntegration = await getIntegrationByProvider(db, user.id, "notion");
 
   return (
     <div className="min-h-screen">
@@ -48,6 +49,7 @@ export default async function SettingsPage() {
           toolSettings={toolSettings ?? []}
           telegramLinked={!!telegramAccount}
           githubConnected={!!ghIntegration}
+          notionConnected={!!notionIntegration}
         />
       </main>
     </div>

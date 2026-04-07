@@ -12,7 +12,7 @@ export interface ToolContext {
   sessionId: string;
   enabledTools: UserToolSetting[];
   integrations: UserIntegration[];
-  integrationTokens: { github?: string };
+  integrationTokens: { github?: string; notion?: string };
 }
 
 /**
@@ -231,6 +231,126 @@ export function buildLangChainTools(ctx: ToolContext) {
             name: z.string(),
             private: z.boolean().optional().default(false),
             description: z.string().optional().default(""),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("notion_search", ctx)) {
+    tools.push(
+      tool(
+        async (input) =>
+          wrapTool(
+            "notion_search",
+            input as Record<string, unknown>,
+            `Buscar en Notion: "${input.query}"`,
+            ctx
+          )(),
+        {
+          name: "notion_search",
+          description:
+            "Searches across all Notion pages and databases shared with the integration.",
+          schema: z.object({
+            query: z.string(),
+            filter: z.enum(["page", "database"]).optional(),
+            page_size: z.number().min(1).max(50).optional().default(10),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("notion_retrieve_page", ctx)) {
+    tools.push(
+      tool(
+        async (input) =>
+          wrapTool(
+            "notion_retrieve_page",
+            input as Record<string, unknown>,
+            `Recuperar página Notion ${input.page_id}`,
+            ctx
+          )(),
+        {
+          name: "notion_retrieve_page",
+          description: "Retrieves a Notion page by its ID.",
+          schema: z.object({
+            page_id: z.string(),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("notion_query_database", ctx)) {
+    tools.push(
+      tool(
+        async (input) =>
+          wrapTool(
+            "notion_query_database",
+            input as Record<string, unknown>,
+            `Consultar base de datos Notion ${input.database_id}`,
+            ctx
+          )(),
+        {
+          name: "notion_query_database",
+          description: "Queries a Notion database and returns its rows.",
+          schema: z.object({
+            database_id: z.string(),
+            page_size: z.number().min(1).max(50).optional().default(10),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("notion_create_page", ctx)) {
+    tools.push(
+      tool(
+        async (input) =>
+          wrapTool(
+            "notion_create_page",
+            input as Record<string, unknown>,
+            `Crear página Notion "${input.title}"`,
+            ctx
+          )(),
+        {
+          name: "notion_create_page",
+          description:
+            "Creates a new Notion page under a parent page or database. Requires confirmation.",
+          schema: z
+            .object({
+              parent_page_id: z.string().optional(),
+              parent_database_id: z.string().optional(),
+              title: z.string(),
+              content: z.string().optional().default(""),
+            })
+            .refine(
+              (v) => Boolean(v.parent_page_id) !== Boolean(v.parent_database_id),
+              { message: "Provide exactly one of parent_page_id or parent_database_id." }
+            ),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("notion_append_paragraph", ctx)) {
+    tools.push(
+      tool(
+        async (input) =>
+          wrapTool(
+            "notion_append_paragraph",
+            input as Record<string, unknown>,
+            `Añadir párrafo a Notion ${input.block_id}`,
+            ctx
+          )(),
+        {
+          name: "notion_append_paragraph",
+          description:
+            "Appends a paragraph block to an existing Notion page or block. Requires confirmation.",
+          schema: z.object({
+            block_id: z.string(),
+            text: z.string(),
           }),
         }
       )

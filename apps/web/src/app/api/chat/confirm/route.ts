@@ -53,10 +53,14 @@ export async function POST(request: Request) {
     }
 
     // approve → load tokens and execute the real tool.
+    const integrationTokens: { github?: string; notion?: string } = {};
     const ghIntegration = await getIntegrationByProvider(db, user.id, "github");
-    const integrationTokens: { github?: string } = {};
     if (ghIntegration?.encrypted_tokens) {
       integrationTokens.github = decryptToken(ghIntegration.encrypted_tokens);
+    }
+    const notionIntegration = await getIntegrationByProvider(db, user.id, "notion");
+    if (notionIntegration?.encrypted_tokens) {
+      integrationTokens.notion = decryptToken(notionIntegration.encrypted_tokens);
     }
 
     const { data: toolSettings } = await db
