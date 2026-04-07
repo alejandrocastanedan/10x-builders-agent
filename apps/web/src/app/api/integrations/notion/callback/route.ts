@@ -32,14 +32,16 @@ export async function GET(request: Request) {
     return NextResponse.redirect(new URL("/login", url.origin));
   }
 
-  // Validate CSRF state from cookie
+  // Validate CSRF state from cookie. Use Next's parsed cookie jar (exact name
+  // match) instead of manual prefix splitting, which would also accept e.g.
+  // `notion_oauth_state_x=...` set by an attacker.
   const cookieState = request.headers
     .get("cookie")
     ?.split(/;\s*/)
-    .find((c) => c.startsWith("notion_oauth_state="))
-    ?.split("=")[1];
+    .map((c) => c.split("="))
+    .find(([k]) => k === "notion_oauth_state")?.[1];
 
-  if (!cookieState || cookieState !== state) {
+  if (!cookieState || cookieState !== state || cookieState.length !== 64) {
     settingsUrl.searchParams.set("notion", "error");
     settingsUrl.searchParams.set("reason", "state_mismatch");
     return NextResponse.redirect(settingsUrl);

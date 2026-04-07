@@ -23,6 +23,7 @@ import {
   queryDatabase,
   createPage,
   appendParagraph,
+  NotionApiError,
 } from "./notion";
 
 export interface ExecutorContext {
@@ -165,7 +166,7 @@ export async function executeTool(
         return {
           ok: true,
           data: {
-            results: data.results.map((r) => ({
+            results: (data.results ?? []).map((r) => ({
               object: r.object,
               id: r.id,
               url: r.url,
@@ -198,7 +199,7 @@ export async function executeTool(
         return {
           ok: true,
           data: {
-            results: data.results.map((r) => ({
+            results: (data.results ?? []).map((r) => ({
               object: r.object,
               id: r.id,
               url: r.url,
@@ -251,6 +252,18 @@ export async function executeTool(
         return { ok: false, error: `Unknown tool: ${toolName}` };
     }
   } catch (err) {
+    // Notion error detail can include page IDs, property names and other
+    // workspace internals — log server-side, surface only the status to the
+    // LLM/user.
+    if (err instanceof NotionApiError) {
+      console.error(
+        `[notion ${err.status} ${err.statusText}] ${err.detail || "(no detail)"}`
+      );
+      return {
+        ok: false,
+        error: `Notion request failed (${err.status} ${err.statusText}).`,
+      };
+    }
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, error: message };
   }

@@ -7,6 +7,25 @@
 const NOTION_BASE = "https://api.notion.com/v1";
 const NOTION_VERSION = "2022-06-28";
 
+/**
+ * Error type that separates the HTTP status (safe to surface to users) from
+ * the verbose Notion detail (which can leak page IDs, property names, and
+ * other workspace internals — kept server-side only).
+ */
+export class NotionApiError extends Error {
+  status: number;
+  statusText: string;
+  detail: string;
+
+  constructor(status: number, statusText: string, detail: string) {
+    super(`Notion ${status} ${statusText}`);
+    this.name = "NotionApiError";
+    this.status = status;
+    this.statusText = statusText;
+    this.detail = detail;
+  }
+}
+
 async function notion<T>(
   token: string,
   path: string,
@@ -27,11 +46,11 @@ async function notion<T>(
     let detail = "";
     try {
       const body = (await res.json()) as { message?: string };
-      detail = body?.message ? `: ${body.message}` : "";
+      detail = body?.message ?? "";
     } catch {
       /* ignore */
     }
-    throw new Error(`Notion ${res.status} ${res.statusText}${detail}`);
+    throw new NotionApiError(res.status, res.statusText, detail);
   }
   return (await res.json()) as T;
 }

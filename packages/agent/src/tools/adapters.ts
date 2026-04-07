@@ -311,7 +311,13 @@ export function buildLangChainTools(ctx: ToolContext) {
           wrapTool(
             "notion_create_page",
             input as Record<string, unknown>,
-            `Crear página Notion "${input.title}"`,
+            // Surface the parent ID in the confirmation card so a
+            // prompt-injected page cannot silently redirect the destination.
+            `Crear página Notion "${input.title}" en ${
+              input.parent_database_id
+                ? `database ${input.parent_database_id}`
+                : `página ${input.parent_page_id}`
+            }`,
             ctx
           )(),
         {

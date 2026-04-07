@@ -64,12 +64,18 @@ Tools with `risk: "medium" | "high"` must **never** execute themselves. The flow
 
 ### OAuth + token storage
 
-GitHub uses a classic OAuth App (client_id + client_secret in env). The flow is implemented from scratch — no `next-auth`, no `@octokit`:
+Both GitHub and Notion use the same hand-rolled OAuth pattern (client_id + client_secret in env, no `next-auth`, no provider SDKs). The two flows live in parallel folders under `/api/integrations/<provider>/{start,callback,disconnect}` and share the encryption + storage helpers.
 
-- `/api/integrations/github/start` generates a 32-byte CSRF `state`, stores it in an httpOnly cookie (`secure` is conditional on the redirect URL being `https://` so localhost dev still works), and redirects to `github.com/login/oauth/authorize`.
-- `/api/integrations/github/callback` validates the cookie state, exchanges the code for an `access_token`, **encrypts it with `encryptToken()` from `packages/db/src/crypto.ts` (AES-256-GCM, key = `OAUTH_ENCRYPTION_KEY` as 32-byte hex)**, and stores it via `upsertIntegration` in `user_integrations.encrypted_tokens`. It also auto-enables the four GitHub tools so the agent can use them immediately.
+- `/api/integrations/<provider>/start` generates a 32-byte CSRF `state`, stores it in an httpOnly cookie (`secure` is conditional on the redirect URL being `https://` so localhost dev still works), and redirects to the provider's authorize URL.
+- `/api/integrations/<provider>/callback` validates the cookie state with **exact-name match + length check** (do NOT use `startsWith` — it accepts attacker-set `<name>_x=...` cookies), exchanges the code for an `access_token`, **encrypts it with `encryptToken()` from `packages/db/src/crypto.ts` (AES-256-GCM, key = `OAUTH_ENCRYPTION_KEY` as 32-byte hex)**, and stores it via `upsertIntegration` in `user_integrations.encrypted_tokens`. It also auto-enables that provider's tools so the agent can use them immediately.
 - `getIntegrationByProvider` is the only query that returns `encrypted_tokens`. The public `UserIntegration` type in `packages/types` deliberately omits that column.
 - Decryption only happens server-side, just before calling `runAgent` or `executeTool`. Tokens are never logged or returned to the client.
+
+**Provider-specific gotchas:**
+- **GitHub** — token exchange POSTs `client_id`/`client_secret` in the JSON body. Uses `scope=repo read:user`.
+- **Notion** — must be a **Public** integration (not Internal) at https://www.notion.so/profile/integrations/public. Token exchange uses **HTTP Basic auth** (`Authorization: Basic base64(client_id:client_secret)`), not body credentials. Notion has **no OAuth `scope` param** — capabilities are fixed per-integration in the Notion dashboard. Returns a long-lived `access_token` (no refresh token, no expiry). The user picks which pages/databases to share in Notion's "page picker" during consent; anything not picked is invisible to the integration even via `notion_search`.
+
+**Notion API client error handling:** `packages/agent/src/tools/notion.ts` throws `NotionApiError` (status + statusText + detail). The executor catch block surfaces only `status statusText` to the LLM/user and logs the verbose `detail` server-side — Notion error bodies can leak page IDs / property names / workspace internals, so they must NOT round-trip back to the model.
 
 ### Data model
 
@@ -96,7 +102,9 @@ Tables:
 - **Env files live in `apps/web/.env.local`, not in the repo root.** Next.js loads them from the app directory. The root `.gitignore` covers `.env*`.
 - **`OAUTH_ENCRYPTION_KEY` must be 32 bytes hex (64 chars).** The crypto module throws on the first call if it's missing or wrong length. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
 - **Adding a new tool** = three files: `catalog.ts` (definition + risk), `adapters.ts` (LangChain `tool()` wiring via `wrapTool`), `executor.ts` (real implementation). Skip any of the three and you'll either get "Unknown tool" at execution time or a tool the agent can't see.
-- **GitHub callback URL** in `github.com/settings/developers` must match `GITHUB_OAUTH_REDIRECT_URL` exactly. When switching between localhost and an ngrok URL, update both the GitHub OAuth App settings AND `.env.local`.
+- **Adding a new OAuth provider** = clone the GitHub or Notion folder under `apps/web/src/app/api/integrations/<provider>/`, widen `integrationTokens` from `{ github?, notion? }` to include the new key in **four places** (`adapters.ts` `ToolContext`, `executor.ts` `ExecutorContext`, `graph.ts` `AgentInput`, and the three token-loading entrypoints: `chat/route.ts`, `chat/confirm/route.ts`, `telegram/webhook/route.ts` `loadIntegrationTokens`), and add a UI section in `settings/<provider>-connect.tsx` + wire it through `settings/page.tsx` + `settings-form.tsx`. No DB migration needed — `user_integrations.provider` is free-form text.
+- **For risky tools, the confirmation `message` string must include any LLM-controlled destination identifiers** (parent page IDs, repo owners, etc.). Otherwise a prompt-injected document could trick the model into picking a different target without the human seeing it on the Aprobar/Cancelar card. Title alone is not enough.
+- **OAuth callback URLs** in the provider dashboards must match the env vars exactly. When switching between localhost and an ngrok URL, update both the provider settings AND `.env.local`.
 
 ## ngrok caveats (recurring pain point)
 
