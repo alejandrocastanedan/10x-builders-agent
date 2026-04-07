@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createServerClient } from "@agents/db";
+import {
+  createServerClient,
+  decryptToken,
+  getIntegrationByProvider,
+} from "@agents/db";
 import { runAgent } from "@agents/agent";
 
 export async function POST(request: Request) {
   try {
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -34,6 +40,17 @@ export async function POST(request: Request) {
       .select("*")
       .eq("user_id", user.id)
       .eq("status", "active");
+
+    // Load and decrypt provider tokens (server-only).
+    const integrationTokens: { github?: string } = {};
+    const ghIntegration = await getIntegrationByProvider(db, user.id, "github");
+    if (ghIntegration?.encrypted_tokens) {
+      try {
+        integrationTokens.github = decryptToken(ghIntegration.encrypted_tokens);
+      } catch (e) {
+        console.error("Failed to decrypt GitHub token:", e);
+      }
+    }
 
     let session = await supabase
       .from("agent_sessions")
@@ -86,15 +103,12 @@ export async function POST(request: Request) {
         status: i.status as "active" | "revoked" | "expired",
         created_at: i.created_at as string,
       })),
+      integrationTokens,
     });
 
-    const pendingConfirmation = result.response.includes("pending_confirmation")
-      ? JSON.parse(result.response)
-      : null;
-
     return NextResponse.json({
-      response: pendingConfirmation ? null : result.response,
-      pendingConfirmation,
+      response: result.pendingConfirmation ? null : result.response,
+      pendingConfirmation: result.pendingConfirmation,
       toolCalls: result.toolCalls,
     });
   } catch (error) {

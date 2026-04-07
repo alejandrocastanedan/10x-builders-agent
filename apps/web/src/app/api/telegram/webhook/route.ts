@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
-import { createServerClient } from "@agents/db";
-import { runAgent } from "@agents/agent";
+import {
+  createServerClient,
+  decryptToken,
+  getIntegrationByProvider,
+  getPendingToolCall,
+  updateToolCallStatus,
+} from "@agents/db";
+import { runAgent, executeTool } from "@agents/agent";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET ?? "";
@@ -60,6 +66,22 @@ async function answerCallbackQuery(callbackQueryId: string, text: string) {
   });
 }
 
+async function loadIntegrationTokens(
+  db: ReturnType<typeof createServerClient>,
+  userId: string
+): Promise<{ github?: string }> {
+  const tokens: { github?: string } = {};
+  const gh = await getIntegrationByProvider(db, userId, "github");
+  if (gh?.encrypted_tokens) {
+    try {
+      tokens.github = decryptToken(gh.encrypted_tokens);
+    } catch (e) {
+      console.error("Failed to decrypt GitHub token:", e);
+    }
+  }
+  return tokens;
+}
+
 export async function POST(request: Request) {
   const secret = request.headers.get("x-telegram-bot-api-secret-token");
   if (WEBHOOK_SECRET && secret !== WEBHOOK_SECRET) {
@@ -74,22 +96,81 @@ export async function POST(request: Request) {
     const cb = update.callback_query;
     const [action, toolCallId] = cb.data.split(":");
 
-    if (action === "approve" && toolCallId) {
-      await db
-        .from("tool_calls")
-        .update({ status: "approved" })
-        .eq("id", toolCallId)
-        .eq("status", "pending_confirmation");
-      await answerCallbackQuery(cb.id, "Aprobado");
-      await sendTelegramMessage(cb.message.chat.id, "Acción aprobada. Ejecutando...");
-    } else if (action === "reject" && toolCallId) {
-      await db
-        .from("tool_calls")
-        .update({ status: "rejected" })
-        .eq("id", toolCallId)
-        .eq("status", "pending_confirmation");
-      await answerCallbackQuery(cb.id, "Rechazado");
+    if (!toolCallId) {
+      await answerCallbackQuery(cb.id, "Acción inválida");
+      return NextResponse.json({ ok: true });
+    }
+
+    const toolCall = await getPendingToolCall(db, toolCallId);
+    if (!toolCall) {
+      await answerCallbackQuery(cb.id, "Esta acción ya no está disponible.");
+      return NextResponse.json({ ok: true });
+    }
+
+    // Resolve owner of this tool call
+    const { data: session } = await db
+      .from("agent_sessions")
+      .select("user_id")
+      .eq("id", toolCall.session_id)
+      .single();
+    if (!session) {
+      await answerCallbackQuery(cb.id, "Sesión no encontrada.");
+      return NextResponse.json({ ok: true });
+    }
+    const userId = session.user_id;
+
+    if (action === "reject") {
+      await updateToolCallStatus(db, toolCallId, "rejected");
+      await answerCallbackQuery(cb.id, "Cancelado");
       await sendTelegramMessage(cb.message.chat.id, "Acción cancelada.");
+      return NextResponse.json({ ok: true });
+    }
+
+    if (action === "approve") {
+      await answerCallbackQuery(cb.id, "Ejecutando...");
+      try {
+        const integrationTokens = await loadIntegrationTokens(db, userId);
+        const { data: toolSettings } = await db
+          .from("user_tool_settings")
+          .select("*")
+          .eq("user_id", userId);
+
+        const result = await executeTool(
+          toolCall.tool_name,
+          toolCall.arguments_json,
+          {
+            db,
+            userId,
+            enabledTools: (toolSettings ?? []).map((t: Record<string, unknown>) => ({
+              id: t.id as string,
+              user_id: t.user_id as string,
+              tool_id: t.tool_id as string,
+              enabled: t.enabled as boolean,
+              config_json: (t.config_json as Record<string, unknown>) ?? {},
+            })),
+            integrationTokens,
+          }
+        );
+
+        if (result.ok) {
+          await updateToolCallStatus(db, toolCallId, "executed", result.data);
+          const summary =
+            result.data && "html_url" in result.data
+              ? `Listo: ${(result.data as { html_url: string }).html_url}`
+              : `Listo: ${JSON.stringify(result.data ?? {})}`;
+          await sendTelegramMessage(cb.message.chat.id, summary);
+        } else {
+          await updateToolCallStatus(db, toolCallId, "failed", { error: result.error });
+          await sendTelegramMessage(
+            cb.message.chat.id,
+            `Falló la acción: ${result.error ?? "error desconocido"}`
+          );
+        }
+      } catch (err) {
+        console.error("Telegram execute error:", err);
+        await sendTelegramMessage(cb.message.chat.id, "Error ejecutando la acción.");
+      }
+      return NextResponse.json({ ok: true });
     }
 
     return NextResponse.json({ ok: true });
@@ -224,6 +305,8 @@ export async function POST(request: Request) {
     .eq("user_id", userId)
     .eq("status", "active");
 
+  const integrationTokens = await loadIntegrationTokens(db, userId);
+
   try {
     const result = await runAgent({
       message: text,
@@ -246,22 +329,15 @@ export async function POST(request: Request) {
         status: i.status as "active" | "revoked" | "expired",
         created_at: i.created_at as string,
       })),
+      integrationTokens,
     });
 
-    // Check if response contains a pending confirmation
-    let parsed: Record<string, unknown> | null = null;
-    try {
-      parsed = JSON.parse(result.response);
-    } catch {
-      // not JSON, regular text response
-    }
-
-    if (parsed?.pending_confirmation) {
-      await sendTelegramMessage(chatId, String(parsed.message ?? "Se requiere confirmación."), {
+    if (result.pendingConfirmation) {
+      await sendTelegramMessage(chatId, result.pendingConfirmation.message, {
         inline_keyboard: [
           [
-            { text: "Aprobar", callback_data: `approve:${parsed.tool_call_id}` },
-            { text: "Cancelar", callback_data: `reject:${parsed.tool_call_id}` },
+            { text: "Aprobar", callback_data: `approve:${result.pendingConfirmation.toolCallId}` },
+            { text: "Cancelar", callback_data: `reject:${result.pendingConfirmation.toolCallId}` },
           ],
         ],
       });

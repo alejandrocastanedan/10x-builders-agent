@@ -2,10 +2,18 @@
 
 import { useState, useRef, useEffect } from "react";
 
+interface PendingConfirmation {
+  toolCallId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  message: string;
+}
+
 interface Message {
   role: string;
   content: string;
   created_at?: string;
+  pending?: PendingConfirmation;
 }
 
 interface Props {
@@ -17,6 +25,7 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -42,20 +51,19 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
 
       const data = await res.json();
 
-      if (data.response) {
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: data.response },
-        ]);
-      }
-
       if (data.pendingConfirmation) {
         setMessages((prev) => [
           ...prev,
           {
             role: "assistant",
-            content: `Se requiere confirmación: ${data.pendingConfirmation.message}\n\n¿Deseas proceder?`,
+            content: data.pendingConfirmation.message,
+            pending: data.pendingConfirmation,
           },
+        ]);
+      } else if (data.response) {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: data.response },
         ]);
       }
     } catch {
@@ -65,6 +73,50 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
       ]);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function resolveConfirmation(toolCallId: string, action: "approve" | "reject") {
+    setResolvingId(toolCallId);
+    try {
+      const res = await fetch("/api/chat/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ toolCallId, action }),
+      });
+      const data = await res.json();
+
+      // Remove the pending state from the corresponding message
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.pending?.toolCallId === toolCallId ? { ...m, pending: undefined } : m
+        )
+      );
+
+      // Append the result message
+      let resultText: string;
+      if (action === "reject") {
+        resultText = "Acción cancelada.";
+      } else if (data.ok && data.result) {
+        const url =
+          typeof data.result === "object" && data.result && "html_url" in data.result
+            ? (data.result as { html_url: string }).html_url
+            : null;
+        resultText = url
+          ? `Listo: ${url}`
+          : `Listo: ${JSON.stringify(data.result)}`;
+      } else {
+        resultText = `Error: ${data.error ?? "no se pudo ejecutar la acción"}`;
+      }
+
+      setMessages((prev) => [...prev, { role: "assistant", content: resultText }]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "Error al confirmar la acción." },
+      ]);
+    } finally {
+      setResolvingId(null);
     }
   }
 
@@ -94,6 +146,24 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
                 }`}
               >
                 <p className="whitespace-pre-wrap">{msg.content}</p>
+                {msg.pending && (
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      onClick={() => resolveConfirmation(msg.pending!.toolCallId, "approve")}
+                      disabled={resolvingId === msg.pending.toolCallId}
+                      className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                    >
+                      {resolvingId === msg.pending.toolCallId ? "Ejecutando..." : "Aprobar"}
+                    </button>
+                    <button
+                      onClick={() => resolveConfirmation(msg.pending!.toolCallId, "reject")}
+                      disabled={resolvingId === msg.pending.toolCallId}
+                      className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium hover:bg-neutral-50 disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-900"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ))}

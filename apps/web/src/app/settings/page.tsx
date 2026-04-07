@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createServerClient, getIntegrationByProvider } from "@agents/db";
 import { SettingsForm } from "./settings-form";
 
 export default async function SettingsPage() {
@@ -24,6 +25,9 @@ export default async function SettingsPage() {
     .eq("user_id", user.id)
     .single();
 
+  const db = createServerClient();
+  const ghIntegration = await getIntegrationByProvider(db, user.id, "github");
+
   return (
     <div className="min-h-screen">
       <header className="border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
@@ -43,6 +47,7 @@ export default async function SettingsPage() {
           profile={profile}
           toolSettings={toolSettings ?? []}
           telegramLinked={!!telegramAccount}
+          githubConnected={!!ghIntegration}
         />
       </main>
     </div>
